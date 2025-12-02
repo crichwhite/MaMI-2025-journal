@@ -1,0 +1,126 @@
+name: Make Documents
+
+on: push
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  set_textcite:  
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3 # this gives the workflow access to your repository files
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'  # or any version you want  
+      - name: Set textcites
+        run: |
+          python text_cite.py
+          printf '\n\\section{Bibliography}\n' >> presidents-men.tex
+      - name: Upload artifact        
+        uses: actions/upload-artifact@v4
+        with:
+          name: text_cite        
+          path: 'presidents-men.tex'
+          
+  convert_via_pandoc:  
+    runs-on: ubuntu-latest
+    needs: set_textcite
+    container:
+      image: docker://pandoc/core:3
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3 # this gives the workflow access to your repository files
+      - name: Download text_cite artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: text_cite
+          path: ./
+    
+      - name: Run Pandoc on main tex file
+        run: |          
+          sed -i  -e 's/\\flat/♭/g' presidents-men.tex
+          sed -i  -e 's/\\sharp/♯/g' presidents-men.tex
+          sed -i  -e 's/\\citetitle/\\textcite/g' presidents-men.tex
+          sed -i  -e 's/\\autocite/\\footcite/g' presidents-men.tex
+          mkdir -p pandoc
+          pandoc -f latex -t html -F pandoc-crossref --citeproc -s -o pandoc/index.html main.tex
+          pandoc -f latex -t docx -F pandoc-crossref --citeproc -s  -o pandoc/article.docx main.tex
+          pandoc -f latex -t html -F pandoc-crossref --citeproc -s  --csl cite-style.csl -o pandoc/alt.html main.tex
+          pandoc -f latex -t docx -F pandoc-crossref --citeproc -s  --csl cite-style.csl -o pandoc/alt.docx main.tex
+          mkdir -p pandoc/img
+          cp -r ./img pandoc/          
+          
+      - name: Upload artifact        
+        uses: actions/upload-artifact@v4
+        with:
+          name: pandoc_files        
+          path: 'pandoc/' # Upload entire repository
+
+  # make_pdf:  
+  #   runs-on: ubuntu-latest
+  #   needs: convert_via_pandoc
+  #   container:
+  #     image: nanozoo/pdflatex:3.14159265--6263fbd
+  #   steps:
+  #     - name: Checkout Repo
+  #       uses: actions/checkout@v3
+        
+  #     - name: Compile LaTeX to PDF
+  #       run: |
+  #         mkdir -p pdf
+  #         pdflatex -output-directory=pdf main.tex || true
+  #         biber pdf/main || true
+  #         pdflatex -output-directory=pdf main.tex || true
+  #         mv pdf/main.pdf pdf/article.pdf
+  #       continue-on-error: true           
+  #     - name: Upload PDF artifact        
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: pdf_files
+  #         path: pdf/
+
+  # Deployment job
+  deploy:
+    needs: convert_via_pandoc
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download pandoc artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pandoc_files
+          path: ./pandoc
+          
+      # - name: Download pdf artifact
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: pdf_files
+      #     path: ./pdf
+          
+      - name: Combine outputs into one directory
+        run: |          
+          mkdir -p final          
+          cp  pandoc/index.html final/          
+          cp  pandoc/article.docx final/
+          cp  pandoc/alt.docx final/
+          cp  pandoc/alt.html final/
+          cp -r pandoc/img final/
+          
+          
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:          
+          path: 'final/'
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
